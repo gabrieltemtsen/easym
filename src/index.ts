@@ -23,6 +23,8 @@ import {
   parseArguments,
 } from "./config/index.ts";
 import { initializeDatabase } from "./database/index.ts";
+import fusePlugin from "../fuse-plugin/index.ts";
+
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -43,7 +45,7 @@ export function createAgent(
 ) {
   elizaLogger.success(
     elizaLogger.successesTitle,
-    "Creating runtime for character",
+    "Creating runtime for character **** an ACTION maybe",
     character.name,
   );
 
@@ -56,6 +58,7 @@ export function createAgent(
     evaluators: [],
     character,
     plugins: [
+      fusePlugin,
       bootstrapPlugin,
       nodePlugin,
       character.settings?.secrets?.WALLET_PUBLIC_KEY ? solanaPlugin : null,

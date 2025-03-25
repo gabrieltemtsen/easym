@@ -1,8 +1,8 @@
 {
-  "name": "Eliza",
+  "name": "easymm",
   "plugins": [],
   "clients": [],
-  "modelProvider": "openrouter",
+  "modelProvider": "groq",
   "settings": {
     "secrets": {},
     "voice": {
