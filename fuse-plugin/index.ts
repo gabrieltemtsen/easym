@@ -88,6 +88,33 @@ function log(level: 'debug' | 'info' | 'warn' | 'error', message: string, data?:
         break;
     }
   }
+  // Function to generate response when authentication fails with a 403 error
+async function generateAuthErrorResponse(runtime: IAgentRuntime, errorStatus: number): Promise<string> {
+  const context = `
+Generate a helpful response for a user whose authentication has failed with a ${errorStatus} error.
+The likely causes are:
+${errorStatus === 401 ? "- Invalid credentials" : ""}
+${errorStatus === 403 ? "- Session expired or access forbidden" : ""}
+${errorStatus === 404 ? "- User account not found" : ""}
+
+Inform them politely that you'll need to restart the authentication process.
+Mention they can say "reset" or "start over" if they want to try again with different cooperative information.
+Keep it conversational and helpful, under 100 words.
+  `;
+  
+  try {
+    const response = await generateText({
+      runtime,
+      context,
+      modelClass: ModelClass.SMALL,
+    });
+    
+    return response || "I'm having trouble accessing your account information. Let's try authenticating again. You can also say 'reset' or 'start over' if you'd like to begin fresh.";
+  } catch (error) {
+    elizaLogger.error('error', 'Error generating auth error response', error);
+    return "I'm having trouble accessing your account information. Let's try authenticating again. You can also say 'reset' or 'start over' if you'd like to begin fresh.";
+  }
+}
   function maskEmail(email: string): string {
     // Return empty string for null/undefined inputs
     if (!email) return "";
@@ -118,18 +145,18 @@ function validateCooperative(input: string): string | null {
     // Normalize input: uppercase and remove spaces/special chars
     const normalizedInput = input.toUpperCase().replace(/[^A-Z0-9]/g, '');
     
-    log('debug', `Validating cooperative input: ${input} -> normalized: ${normalizedInput}`);
+    elizaLogger.debug('debug', `Validating cooperative input: ${input} -> normalized: ${normalizedInput}`);
     
     // 1. Exact match
     if (COOPERATIVE_MAP[normalizedInput]) {
-      log('info', `Exact match found for ${normalizedInput}`);
+      elizaLogger.info('info', `Exact match found for ${normalizedInput}`);
       return COOPERATIVE_MAP[normalizedInput];
     }
     
     // 2. Partial match (contains)
     for (const [key, value] of Object.entries(COOPERATIVE_MAP)) {
       if (normalizedInput.includes(key) || key.includes(normalizedInput)) {
-        log('info', `Partial match found: ${normalizedInput} ~ ${key}`);
+        elizaLogger.info('info', `Partial match found: ${normalizedInput} ~ ${key}`);
         return value;
       }
     }
@@ -144,7 +171,7 @@ function validateCooperative(input: string): string | null {
     }
     
     if (bestMatch) {
-      log('info', `Fuzzy match found: ${normalizedInput} ~ ${bestMatch.key} (score: ${bestMatch.score.toFixed(2)})`);
+      elizaLogger.info('info', `Fuzzy match found: ${normalizedInput} ~ ${bestMatch.key} (score: ${bestMatch.score.toFixed(2)})`);
       return bestMatch.value;
     }
     
@@ -193,7 +220,7 @@ function editDistance(a: string, b: string): number {
   
  // Enhanced getAuthState with better error handling and defaults
 async function getAuthState(runtime: IAgentRuntime, roomId: UUID): Promise<any> {
-  log('debug', `Getting auth state for room: ${roomId}`);
+  elizaLogger.debug('debug', `Getting auth state for room: ${roomId}`);
   
   try {
     const memories = await runtime.databaseAdapter.getMemories({
@@ -205,18 +232,18 @@ async function getAuthState(runtime: IAgentRuntime, roomId: UUID): Promise<any> 
     });
     
     if (memories.length > 0) {
-      log('debug', `Found auth state for room ${roomId}:`, memories[0].content);
+      elizaLogger.debug('debug', `Found auth state for room ${roomId}:`, memories[0].content);
       return memories[0].content;
     } else {
       const defaultState = { 
         status: AuthState.NEED_COOPERATIVE,
         roomId // Include roomId for convenience
       };
-      log('debug', `No auth state found for room ${roomId}, returning default state`);
+      elizaLogger.debug('debug', `No auth state found for room ${roomId}, returning default state`);
       return defaultState;
     }
   } catch (error) {
-    log('error', `Error getting auth state for room ${roomId}:`, error);
+    elizaLogger.error('error', `Error getting auth state for room ${roomId}:`, error);
     return { 
       status: AuthState.NEED_COOPERATIVE,
       roomId,
@@ -227,7 +254,7 @@ async function getAuthState(runtime: IAgentRuntime, roomId: UUID): Promise<any> 
 
 // Enhanced setAuthState with better error handling
 async function setAuthState(runtime: IAgentRuntime, roomId: UUID, stateData: any): Promise<void> {
-  log('debug', `Setting auth state for room ${roomId}:`, {
+  elizaLogger.debug('debug', `Setting auth state for room ${roomId}:`, {
     ...stateData,
     token: stateData.token ? '[REDACTED]' : undefined,
     otp: stateData.otp ? '[REDACTED]' : undefined,
@@ -257,9 +284,9 @@ async function setAuthState(runtime: IAgentRuntime, roomId: UUID, stateData: any
     };
     
     await runtime.databaseAdapter.createMemory(memory, AUTH_STATE_TABLE, true);
-    log('debug', `Successfully set auth state for room ${roomId}`);
+    elizaLogger.debug('debug', `Successfully set auth state for room ${roomId}`);
   } catch (error) {
-    log('error', `Error setting auth state for room ${roomId}:`, error);
+    elizaLogger.error('error', `Error setting auth state for room ${roomId}:`, error);
     throw error; // Re-throw to handle at call site
   }
 }
@@ -269,7 +296,7 @@ async function setAuthState(runtime: IAgentRuntime, roomId: UUID, stateData: any
     const state = await getAuthState(runtime, roomId);
     const isInFlow = state.status !== AuthState.AUTHENTICATED && state.status !== undefined;
     
-    log('debug', `User in room ${roomId} is in auth flow: ${isInFlow}, auth state: ${state.status}`);
+    elizaLogger.debug('debug', `User in room ${roomId} is in auth flow: ${isInFlow}, auth state: ${state.status}`);
     return isInFlow;
   }
   
@@ -282,12 +309,12 @@ async function setAuthState(runtime: IAgentRuntime, roomId: UUID, stateData: any
   ): Promise<boolean> {
     const text = message.content.text.toLowerCase();
     
-    log('info', `Handling cooperative selection for message: "${text}"`);
+    elizaLogger.info('info', `Handling cooperative selection for message: "${text}"`);
     
     // Direct check for known cooperatives in the message first
     for (const [key, value] of Object.entries(COOPERATIVE_MAP)) {
       if (text.includes(key.toLowerCase())) {
-        log('info', `Found cooperative directly in message: ${key}`);
+        elizaLogger.info('info', `Found cooperative directly in message: ${key}`);
         
         await setAuthState(runtime, message.roomId, {
           ...authState,
@@ -314,7 +341,7 @@ async function setAuthState(runtime: IAgentRuntime, roomId: UUID, stateData: any
   User message: "${text}"
     `;
     
-    log('debug', `Generating text for cooperative extraction with context: ${context}`);
+    elizaLogger.debug('debug', `Generating text for cooperative extraction with context: ${context}`);
     
     const cooperativeName = await generateText({
       runtime,
@@ -323,13 +350,13 @@ async function setAuthState(runtime: IAgentRuntime, roomId: UUID, stateData: any
       stop: ["\n"],
     });
     
-    log('info', `Extracted cooperative name: "${cooperativeName}"`);
+    elizaLogger.info('info', `Extracted cooperative name: "${cooperativeName}"`);
     
     const normalizedCooperativeName = cooperativeName.trim().toUpperCase();
     const tenantId = COOPERATIVE_MAP[normalizedCooperativeName];
     
     if (tenantId) {
-      log('info', `Successfully identified cooperative: "${normalizedCooperativeName}" -> ${tenantId}`);
+      elizaLogger.info('info', `Successfully identified cooperative: "${normalizedCooperativeName}" -> ${tenantId}`);
       
       await setAuthState(runtime, message.roomId, {
         ...authState,
@@ -359,7 +386,7 @@ async function setAuthState(runtime: IAgentRuntime, roomId: UUID, stateData: any
   }
   // Function to reset auth state for a room
 async function resetAuthState(runtime: IAgentRuntime, roomId: UUID): Promise<void> {
-  log('info', `Resetting auth state for room ${roomId}`);
+  elizaLogger.info('info', `Resetting auth state for room ${roomId}`);
   
   try {
     // Option 1: Using your existing setAuthState function with empty state
@@ -374,9 +401,9 @@ async function resetAuthState(runtime: IAgentRuntime, roomId: UUID): Promise<voi
     //   tableName: AUTH_STATE_TABLE
     // });
     
-    log('info', `Successfully reset auth state for room ${roomId}`);
+    elizaLogger.info('info', `Successfully reset auth state for room ${roomId}`);
   } catch (error) {
-    log('error', `Error resetting auth state for room ${roomId}:`, error);
+    elizaLogger.error('error', `Error resetting auth state for room ${roomId}:`, error);
     throw error;
   }
 }
@@ -390,8 +417,8 @@ async function handleCredentialsCollection(
 ): Promise<boolean> {
   const text = message.content.text;
   
-  log('info', `Handling credentials collection for room ${message.roomId}`);
-  log('debug', `Message text: "${text}"`);
+  elizaLogger.info('info', `Handling credentials collection for room ${message.roomId}`);
+  elizaLogger.debug('debug', `Message text: "${text}"`);
   
   // Enhanced context for better extraction
   const context = `
@@ -409,7 +436,7 @@ Examples:
 User message: "${text}"
   `;
   
-  log('debug', `Generating text for credentials extraction`);
+  elizaLogger.debug('debug', `Generating text for credentials extraction`);
   
   let extractionResult;
   try {
@@ -421,10 +448,10 @@ User message: "${text}"
     
     // Clean the JSON string (remove markdown code blocks if present)
     const cleanedResult = extractionResult.replace(/```json|```/g, '').trim();
-    log('debug', `Cleaned extraction result: ${cleanedResult}`);
+    elizaLogger.debug('debug', `Cleaned extraction result: ${cleanedResult}`);
     extractionResult = cleanedResult;
   } catch (error) {
-    log('error', 'Error during credentials extraction', error);
+    elizaLogger.error('error', 'Error during credentials extraction', error);
     await callback({
       text: "I had trouble understanding your credentials. Please provide your details in this format: 'Email: your@email.com, Employee #: ABC123'"
     });
@@ -434,9 +461,9 @@ User message: "${text}"
   let credentials;
   try {
     credentials = JSON.parse(extractionResult);
-    log('info', `Parsed credentials - Email: ${maskEmail(credentials.email)}, Employee #: ${credentials.employee_number}`);
+    elizaLogger.info('info', `Parsed credentials - Email: ${maskEmail(credentials.email)}, Employee #: ${credentials.employee_number}`);
   } catch (error) {
-    log('error', 'Error parsing credentials JSON', {
+    elizaLogger.error('error', 'Error parsing credentials JSON', {
       error: error.message,
       extractionResult
     });
@@ -447,23 +474,73 @@ User message: "${text}"
     return true;
   }
   
+ // Check if we already have partial credentials from a previous message
+ if (authState.partialCredentials) {
+  credentials = {
+    email: credentials.email || authState.partialCredentials.email,
+    employee_number: credentials.employee_number || authState.partialCredentials.employee_number
+  };
+}
+
+// Store partial credentials in auth state
+const hasCompleteCredentials = credentials.email && isValidEmail(credentials.email) && credentials.employee_number;
+
+if (!hasCompleteCredentials) {
+  // Update the auth state with the partial credentials
+  await setAuthState(runtime, message.roomId, {
+    ...authState,
+    partialCredentials: credentials
+  });
+  
   // Handle missing email
   if (!credentials.email || !isValidEmail(credentials.email)) {
     log('warn', `Invalid or missing email: ${credentials.email}`);
-    await callback({
-      text: "I need a valid email address to proceed. Please provide your email address."
+    
+    // Use LLM to generate a more natural response context
+    const responseContext = `
+Create a friendly response asking the user for their email address. 
+The user has provided some information but is missing a valid email address.
+Keep it conversational and brief.
+    `;
+    
+    const response = await generateText({
+      runtime,
+      context: responseContext,
+      modelClass: ModelClass.SMALL,
     });
+    
+    await callback({
+      text: response || "I'll need your email address to continue. Could you please provide it?"
+    });
+    
     return true;
   }
   
   // Handle missing employee number
   if (!credentials.employee_number) {
     log('warn', `Missing employee number`);
-    await callback({
-      text: "I also need your employee number to verify your identity. Please provide your employee number."
+    
+    // Use LLM to generate a more natural response context
+    const responseContext = `
+Create a friendly response asking the user for their employee number.
+The user has provided their email (${maskEmail(credentials.email)}) but not their employee number.
+Mention that this is needed to verify their identity within the ${authState.originalCoopName || "cooperative"} system.
+Keep it conversational and brief.
+    `;
+    
+    const response = await generateText({
+      runtime,
+      context: responseContext,
+      modelClass: ModelClass.SMALL,
     });
+    
+    await callback({
+      text: response || "I also need your employee number to verify your identity. Could you provide that as well?"
+    });
+    
     return true;
   }
+}
   
   // Proceed with authentication
   try {
@@ -474,7 +551,7 @@ User message: "${text}"
       tenant: authState.cooperative
     };
     
-    log('info', `Authenticating user with API`, {
+    elizaLogger.info('info', `Authenticating user with API`, {
       url: apiUrl,
       tenant: authState.cooperative,
       employee_number: credentials.employee_number,
@@ -491,11 +568,11 @@ User message: "${text}"
       body: JSON.stringify(requestBody),
     });
     
-    log('info', `Auth API response status: ${response.status}`);
+    elizaLogger.info('info', `Auth API response status: ${response.status}`);
     
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({ message: "Authentication failed" }));
-      log('error', `Auth API error: ${response.status} - ${errorData.message || 'Unknown error'}`);
+      elizaLogger.error('error', `Auth API error: ${response.status} - ${errorData.message || 'Unknown error'}`);
       
       // Give a specific error message based on the status code
       let errorMessage = "I couldn't authenticate you with the provided information. ";
@@ -513,15 +590,15 @@ User message: "${text}"
     }
     
     const data = await response.json();
-    log('debug', `Auth API parsed response:`, data);
+    elizaLogger.debug('debug', `Auth API parsed response:`, data);
     
     // Validate the response contains required fields
     if (!data.data.otp || !data.data.token) {
-      log('error', 'API response missing required fields', data);
+      elizaLogger.error('error', 'API response missing required fields', data);
       throw new Error('Invalid API response - missing OTP or token');
     }
     
-    log('info', `Authentication successful, OTP generated`);
+    elizaLogger.info('info', `Authentication successful, OTP generated`);
     
     await setAuthState(runtime, message.roomId, {
       ...authState,
@@ -530,6 +607,7 @@ User message: "${text}"
       otp: data.data.otp,
       token: data.data.token,
       responseData: data,
+      postAuthAction: "AUTHENTICATE_USER",
       otpGeneratedAt: new Date().toISOString()
     });
     
@@ -541,7 +619,7 @@ User message: "${text}"
     
     return true;
   } catch (error) {
-    // log('error', 'Authentication API error', {
+    // elizaLogger.error('error', 'Authentication API error', {
     //   error: error.message,
     //   stack: error.stack
     // });
@@ -570,53 +648,34 @@ async function handleOTPVerification(
   authState: any,
   callback: HandlerCallback
 ): Promise<boolean> {
-  const text = message.content.text;
+  const text = message.content.text.trim();
   
-  log('info', `Handling OTP verification for room ${message.roomId}`);
-  log('debug', `Message text: "${text}"`);
+  elizaLogger.info('info', `Handling OTP verification for room ${message.roomId}`);
+  elizaLogger.info('info', `OTP message text: "${text}"`);
   
-  // Check if OTP has expired (after 10 minutes)
-  const otpGeneratedAt = new Date(authState.otpGeneratedAt || 0).getTime();
-  const currentTime = Date.now();
-  const otpExpirationTime = 10 * 60 * 1000; // 10 minutes in milliseconds
-  
-  if (currentTime - otpGeneratedAt > otpExpirationTime) {
-    log('info', `OTP has expired, restarting authentication`);
-
-    elizaLogger.warn('OTP expired for room', message.roomId);
-    
-    await callback({
-      text: "Your verification code has expired. Let's restart the process. Please provide your email and employee number again."
-    });
-    
-    await setAuthState(runtime, message.roomId, {
-      ...authState,
-      status: AuthState.NEED_CREDENTIALS,
-      lastError: "OTP expired"
-    });
-    
-    return true;
-  }
-  
-  const context = `
+  // Skip OTP extraction if the message is already just a numeric code
+  let extractedOTP = text;
+  if (!/^\d+$/.test(text)) {
+    const context = `
 Extract the OTP (numerical code) from the following user message.
 Respond with just the numbers, nothing else.
 If no OTP is found, respond with "NO_OTP".
 
 User message: "${text}"
-  `;
+    `;
+    
+    extractedOTP = await generateText({
+      runtime,
+      context,
+      modelClass: ModelClass.SMALL,
+      stop: ["\n"],
+    });
+  }
   
-  const extractedOTP = await generateText({
-    runtime,
-    context,
-    modelClass: ModelClass.SMALL,
-    stop: ["\n"],
-  });
-  
-  log('info', `Extracted OTP: "${extractedOTP}"`);
+  elizaLogger.info('info', `OTP processing: raw="${text}", extracted="${extractedOTP}"`);
   
   if (extractedOTP === "NO_OTP" || !extractedOTP.match(/^\d+$/)) {
-    log('info', `Invalid OTP format: "${extractedOTP}"`);
+    elizaLogger.info('info', `Invalid OTP format: "${extractedOTP}"`);
     
     await callback({
       text: "I couldn't identify a valid verification code in your message. Please enter only the 6-digit numerical code sent to your email."
@@ -625,7 +684,7 @@ User message: "${text}"
   }
   
   if (extractedOTP === authState.otp) {
-    log('info', `OTP verification successful for room ${message.roomId}`);
+    elizaLogger.info('info', `OTP verification successful for room ${message.roomId}`);
     
     await setAuthState(runtime, message.roomId, {
       ...authState,
@@ -635,7 +694,7 @@ User message: "${text}"
     
     // Check if there's a post-auth action to perform
     if (authState.postAuthAction === "CHECK_LOAN") {
-      log('info', `Proceeding with loan info check after successful authentication`);
+      elizaLogger.info('info', `Proceeding with loan info check after successful authentication`);
       
       await callback({
         text: "You've been successfully authenticated! I'll now check your loan information."
@@ -645,8 +704,7 @@ User message: "${text}"
       const loanInfoType = await determineLoanInfoType(runtime, "loan information");
       const apiUrl = `https://api.techfsn.com/api/bot/client-loan-info?tenant=${authState.cooperative}&employee_number=${authState.credentials.employee_number}`;
       
-      log('info', `Fetching loan info from ${apiUrl} after authentication`);
-      console.log('GETTING LOAN INFO');
+      elizaLogger.info('info', `Fetching loan info from ${apiUrl} after authentication`);
       
       try {
         const response = await fetch(apiUrl, {
@@ -665,14 +723,12 @@ User message: "${text}"
         
         const loanData = await response.json();
         const formattedResponse = await formatLoanResponse(runtime, loanData, loanInfoType);
-
-        console.log('LOAN INFO', formattedResponse);
         
         await callback({
           text: formattedResponse
         });
       } catch (error) {
-        log('error', 'Error fetching loan info after authentication', error);
+        elizaLogger.error('error', 'Error fetching loan info after authentication', error);
         
         await callback({
           text: "I authenticated you successfully, but encountered an issue retrieving your loan information. Please ask me about your loan again, and I'll try once more."
@@ -686,7 +742,7 @@ User message: "${text}"
     
     return true;
   } else {
-    elizaLogger.warn( `OTP verification failed: provided="${extractedOTP}", expected="${authState.otp}"`);
+    elizaLogger.warn('warn', `OTP verification failed: provided="${extractedOTP}", expected="${authState.otp}"`);
     
     await callback({
       text: "The verification code you provided doesn't match what we sent. Please check your email and try again. If you don't see it, check your spam folder."
@@ -701,33 +757,80 @@ async function handleAuthentication(runtime: IAgentRuntime, message: Memory, sta
   const roomId = message.roomId;
   const userId = message.userId;
   
-  log('info', `Handling authentication for room ${roomId}, user ${userId}`);
-  
+  elizaLogger.info('info', `Handling authentication for room ${roomId}, user ${userId}`);
   const authState = await getAuthState(runtime, roomId);
-  log('info', `Current auth state: ${authState.status}`);
+  elizaLogger.info('info', `Current auth state: ${authState.status}`);
   
+  // CRITICAL: Skip OTP handling in this handler
+  if (authState.status === AuthState.NEED_OTP && /^\d+$/.test(message.content.text.trim())) {
+    elizaLogger.info('info', `Skipping OTP handling in authenticateAction - deferring to VERIFY_OTP action`);
+    return false;
+  }
+  // In handleAuthentication for FAILED state:
+if (authState.status === AuthState.FAILED) {
+  elizaLogger.info('info', `Resetting failed auth state`);
+  
+  const context = `
+Generate a friendly response to a user whose authentication has failed.
+Let them know we're going to try again and ask which cooperative they belong to.
+Suggest they can also say "reset" or "start over" if they want to try again with a fresh start.
+Keep it conversational and helpful.
+  `;
+  
+  const response = await generateText({
+    runtime,
+    context,
+    modelClass: ModelClass.SMALL,
+  });
+  
+  await setAuthState(runtime, roomId, { 
+    status: AuthState.NEED_COOPERATIVE,
+    userId,
+    postAuthAction: authState.postAuthAction // Preserve the post-auth action
+  });
+  
+  await callback({
+    text: response || "Let's try authenticating again. Which cooperative do you belong to? If you'd like to start fresh, just say 'reset' or 'start over'."
+  });
+  
+  return true;
+}
+  
+
+  
+  // Normal auth flow based on state
   switch(authState.status) {
     case AuthState.NEED_COOPERATIVE:
-      log('info', `Starting cooperative selection flow`);
+      elizaLogger.info('info', `Starting cooperative selection flow`);
       return await handleCooperativeSelection(runtime, message, authState, callback);
       
     case AuthState.NEED_CREDENTIALS:
-      log('info', `Starting credentials collection flow`);
+      elizaLogger.info('info', `Starting credentials collection flow`);
       return await handleCredentialsCollection(runtime, message, authState, callback);
       
-    case AuthState.NEED_OTP:
-      log('info', `Starting OTP verification flow`);
-      return await handleOTPVerification(runtime, message, authState, callback);
+      case AuthState.NEED_OTP:
+        // No longer handling OTP here - let the dedicated action handle it
+        elizaLogger.info('info', `Deferring OTP handling to VERIFY_OTP action`);
+        await callback({
+          text: "Please enter the 6-digit verification code sent to your email."
+        });
+        return true;
       
     case AuthState.AUTHENTICATED:
-      log('info', `User is already authenticated`);
+      elizaLogger.info('info', `User is already authenticated`);
+      // Check if there's a pending post-auth action
+      if (authState.postAuthAction) {
+        elizaLogger.info('info', `Executing pending post-auth action: ${authState.postAuthAction}`);
+        return await handlePostAuthAction(runtime, authState, callback);
+      }
+      
       await callback({
         text: "You're already authenticated! How can I help you today? You can check your loan information or other account details."
       });
       return true;
       
     case AuthState.FAILED:
-      log('info', `Resetting failed auth state`);
+      elizaLogger.info('info', `Resetting failed auth state`);
       await setAuthState(runtime, roomId, { 
         status: AuthState.NEED_COOPERATIVE,
         userId,
@@ -739,7 +842,7 @@ async function handleAuthentication(runtime: IAgentRuntime, message: Memory, sta
       return true;
       
     default:
-      log('info', `Starting new auth flow`);
+      elizaLogger.info('info', `Starting new auth flow`);
       await setAuthState(runtime, roomId, { 
         status: AuthState.NEED_COOPERATIVE,
         userId
@@ -750,6 +853,7 @@ async function handleAuthentication(runtime: IAgentRuntime, message: Memory, sta
       return true;
   }
 }
+
    // Helper function to validate email format
   function isValidEmail(email: string): boolean {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
@@ -757,7 +861,6 @@ async function handleAuthentication(runtime: IAgentRuntime, message: Memory, sta
   
   // -------- ACTIONS DEFINITIONS --------
   
-// Updated Authentication Action (more passive, triggered by user messages in auth flow)
 const authenticateAction: Action = {
   name: "AUTHENTICATE_USER",
   description: "Handles user authentication to access cooperative services",
@@ -769,17 +872,37 @@ const authenticateAction: Action = {
   
   validate: async (runtime: IAgentRuntime, message: Memory) => {
     // Check if user is already in auth flow
+    const text = message.content.text.trim();
+    
+    // NEVER handle pure numeric input with authenticate action
+    if (/^\d+$/.test(text)) {
+      elizaLogger.info('info', `AUTHENTICATE_USER rejecting numeric input: "${text}"`);
+      return false;
+    }
     const authState = await getAuthState(runtime, message.roomId);
+    if (authState.status !== AuthState.AUTHENTICATED && 
+      authState.status !== undefined) {
+    
+    // If we're in NEED_OTP state and the message is numeric,
+    // let the dedicated OTP action handle it
+    if (authState.status === AuthState.NEED_OTP && 
+        /^\d+$/.test(message.content.text.trim())) {
+      elizaLogger.debug('debug', `Message appears to be an OTP code, deferring to OTP action`);
+      return false;
+    }
+    
+    elizaLogger.debug('debug', `User is in auth flow (${authState.status}), continuing authentication`);
+    return true;
+  }
     const isInAuthFlow = authState.status !== AuthState.AUTHENTICATED && 
                          authState.status !== undefined;
     
     if (isInAuthFlow) {
-      log('debug', `User is in auth flow (${authState.status}), continuing authentication`);
+      elizaLogger.debug('debug', `User is in auth flow (${authState.status}), continuing authentication`);
       return true;
     }
     
     // If not in flow, only trigger on explicit auth requests
-    const text = message.content.text.toLowerCase();
     const authKeywords = [
       "login", "authenticate", "verify", "identity", "sign in", 
       "credentials", "account access"
@@ -789,8 +912,22 @@ const authenticateAction: Action = {
       text.includes(keyword) || 
       new RegExp(`\\b${keyword}\\b`).test(text)
     );
+
+    // Additional check to avoid conflicting with CHECK_LOAN action
+    // If message contains loan keywords and auth keywords, don't trigger auth action
+    // as the loan action will handle authentication
+    const loanKeywords = ["loan", "borrow", "credit", "payment", "balance"];
+    const containsLoanKeyword = loanKeywords.some(keyword => 
+      text.includes(keyword) || 
+      new RegExp(`\\b${keyword}\\b`).test(text)
+    );
+    if (containsLoanKeyword && containsAuthKeyword) {
+      elizaLogger.debug('debug', `Message contains both loan and auth keywords, deferring to CHECK_LOAN action`);
+      return false;
+    }
     
-    log('debug', `Message contains explicit auth keywords: ${containsAuthKeyword}`);
+    
+    elizaLogger.debug('debug', `Message contains explicit auth keywords: ${containsAuthKeyword}`);
     return containsAuthKeyword;
   },
   
@@ -838,14 +975,30 @@ const authenticateAction: Action = {
 const resetAction: Action = {
   name: "RESET_AUTH",
   description: "Reset authentication state and start fresh",
-  similes: ["RESTART", "START_OVER", "RESET", "CLEAR", "REFRESH"],
-  
+  similes: [
+    "RESTART", 
+    "START_OVER", 
+    "RESET", 
+    "CLEAR", 
+    "REFRESH", 
+    "BEGIN_AGAIN",
+    "NEW_CONVERSATION",
+    "START_FRESH",
+    "LOG_OUT",
+    "SIGN_OUT",
+    "FORGET_ME",
+    "START_ANEW",
+    "WIPE_SESSION",
+    "CLEAN_SLATE"
+  ],  
   validate: async (runtime: IAgentRuntime, message: Memory) => {
     const text = message.content.text.toLowerCase();
     
     const resetKeywords = [
       "reset", "restart", "start over", "clear", "begin again", 
-      "start fresh", "start new", "new session"
+      "start fresh", "start new", "new session", "log out", "sign out",
+      "forget me", "clean slate", "wipe", "from scratch", "re-do",
+      "try again from beginning", "reboot", "fresh start"
     ];
     
     const isResetCommand = resetKeywords.some(keyword => 
@@ -859,8 +1012,21 @@ const resetAction: Action = {
   handler: async (runtime: IAgentRuntime, message: Memory, _state: State, _options, callback: HandlerCallback) => {
     await resetAuthState(runtime, message.roomId);
     
+    // Generate a more natural response
+    const resetContext = `
+Generate a friendly response letting the user know you've reset their session and authentication data.
+Let them know they can start fresh and ask about their cooperative account or loan information.
+Keep it conversational and brief.
+    `;
+    
+    const resetResponse = await generateText({
+      runtime,
+      context: resetContext,
+      modelClass: ModelClass.SMALL,
+    });
+    
     await callback({
-      text: "I've reset our conversation. Let's start fresh! If you need help with your cooperative account, just let me know."
+      text: resetResponse || "I've reset our conversation. Let's start fresh! If you need help with your cooperative account or loan information, just let me know."
     });
     
     return true;
@@ -877,20 +1043,51 @@ const resetAction: Action = {
       {
         user: "{{user2}}",
         content: {
-          text: "I've reset our conversation. Let's start fresh! If you need help with your cooperative account, just let me know.",
+          text: "I've reset our conversation. Let's start fresh! If you need help with your cooperative account or loan information, just let me know.",
+          action: "RESET_AUTH"
+        }
+      }
+    ],
+    [
+      {
+        user: "{{user1}}",
+        content: {
+          text: "I want to start over"
+        }
+      },
+      {
+        user: "{{user2}}",
+        content: {
+          text: "No problem! I've cleared our previous session data. We can begin again whenever you're ready.",
+          action: "RESET_AUTH"
+        }
+      }
+    ],
+    [
+      {
+        user: "{{user1}}",
+        content: {
+          text: "Can we start from scratch please?"
+        }
+      },
+      {
+        user: "{{user2}}",
+        content: {
+          text: "Absolutely! I've reset everything and we're starting with a clean slate now. How can I help you today?",
           action: "RESET_AUTH"
         }
       }
     ]
   ]
 };
+
 // Post-Authentication Action Handler
 async function handlePostAuthAction(runtime: IAgentRuntime, authState: any, callback: HandlerCallback): Promise<boolean> {
   if (!authState.postAuthAction) {
     return false;
   }
   
-  log('info', `Handling post-auth action: ${authState.postAuthAction}`);
+  elizaLogger.info('info', `Handling post-auth action: ${authState.postAuthAction}`);
   
   switch (authState.postAuthAction) {
     case "CHECK_LOAN":
@@ -899,7 +1096,7 @@ async function handlePostAuthAction(runtime: IAgentRuntime, authState: any, call
         const loanInfoType = "DETAILS"; // Default to general details
         const apiUrl = `https://api.techfsn.com/api/bot/client-loan-info?tenant=${authState.cooperative}&employee_number=${authState.credentials.employee_number}`;
         
-        log('info', `Executing post-auth loan check: ${apiUrl}`);
+        elizaLogger.info('info', `Executing post-auth loan check: ${apiUrl}`);
         
         const response = await fetch(apiUrl, {
           method: 'GET',
@@ -930,7 +1127,7 @@ async function handlePostAuthAction(runtime: IAgentRuntime, authState: any, call
         
         return true;
       } catch (error) {
-        log('error', 'Error executing post-auth loan check', error);
+        elizaLogger.error('error', 'Error executing post-auth loan check', error);
         
         await callback({
           text: "I authenticated you successfully, but encountered an issue retrieving your loan information. Please ask me about your loan again, and I'll try once more."
@@ -959,32 +1156,79 @@ const loanInfoAction: Action = {
     "LOAN_BALANCE", 
     "LOAN_DETAILS",
     "MY_LOAN",
-    "VIEW_LOAN"
+    "VIEW_LOAN",
+    "LOAN_PAYMENT",
+    "PAYMENT_INFO",
+    "REPAYMENT_SCHEDULE",
+    "REPAYMENT_STATUS",
+    "LOAN_AMOUNT",
+    "LOAN_INTEREST",
+    "LOAN_DURATION",
+    "LOAN_TERM",
+    "LOAN_APPLICATION",
+    "OUTSTANDING_BALANCE",
+    "DEBT_INFO",
+    "REMAINING_BALANCE",
+    "NEXT_PAYMENT"
   ],
   
   validate: async (runtime: IAgentRuntime, message: Memory) => {
     const text = message.content.text.toLowerCase();
     
-    log('debug', `Validating loan info action for message: "${text}"`);
+    elizaLogger.debug('debug', `Validating loan info action for message: "${text}"`);
+     // IMMEDIATE REJECTION: If it's a numeric code, NEVER handle with loan action
+     if (/^\d+$/.test(text)) {
+      elizaLogger.info('info', `CHECK_LOAN rejecting numeric input: "${text}"`);
+      return false;
+    }
+
+    // CRITICAL: Check if this appears to be an OTP code - if so, NEVER handle it
+    if (/^\d+$/.test(text.trim())) {
+      // Get auth state to check if we're in OTP verification
+      try {
+        const authState = await getAuthState(runtime, message.roomId);
+        if (authState.status === AuthState.NEED_OTP) {
+          elizaLogger.warn('warn', `Message appears to be an OTP code during OTP verification stage, REJECTING loan action`);
+          return false;
+        }
+      } catch (error) {
+        // If we can't check auth state, err on the side of caution with numeric inputs
+        elizaLogger.error('error', `Error checking auth state for numeric input, rejecting loan action:`, error);
+        return false;
+      }
+    }
+
+    // Check if user is already in any auth flow stage - if so, don't trigger this action
+    try {
+      const authState = await getAuthState(runtime, message.roomId);
+      if (authState.status !== AuthState.AUTHENTICATED && 
+          authState.status !== undefined) {
+        elizaLogger.debug('debug', `User is in auth flow (${authState.status}), not triggering loan action`);
+        return false;
+      }
+    } catch (error) {
+      elizaLogger.error('error', `Error checking auth state, assuming not in auth flow:`, error);
+      // Continue validation if we can't check auth state
+    }
     
+    // Rest of validation remains the same...
     const loanKeywords = [
       "loan", "borrow", "credit", "debt", "owe", "payment", 
       "balance", "due", "repayment", "interest", "principal",
       "check my", "view my", "show my", "get my", "tell me about my"
     ];
     
-    // Check if message contains loan-related keywords
     const isLoanRelated = loanKeywords.some(keyword => 
       text.includes(keyword) || 
       new RegExp(`\\b${keyword}\\b`).test(text)
     );
     
-    log('debug', `Message is loan related: ${isLoanRelated}`);
+    elizaLogger.debug('debug', `Message is loan related: ${isLoanRelated}`);
     return isLoanRelated;
   },
   
   handler: async (runtime: IAgentRuntime, message: Memory, state: State, _options: {[key: string]: unknown}, callback: HandlerCallback) => {
-    log('info', `Handling loan info action for room ${message.roomId}`);
+    elizaLogger.info('info', `Handling loan info action for room ${message.roomId}`);
     
     try {
       // Check if user is authenticated
@@ -992,7 +1236,7 @@ const loanInfoAction: Action = {
       
       // If not authenticated, start authentication flow
       if (authState.status !== AuthState.AUTHENTICATED) {
-        log('info', `User not authenticated, initiating auth flow for loan request`);
+        elizaLogger.info('info', `User not authenticated, initiating auth flow for loan request`);
 
         elizaLogger.info('User not authenticated, initiating auth flow for loan request');
         elizaLogger.info(authState)
@@ -1005,21 +1249,21 @@ const loanInfoAction: Action = {
         await setAuthState(runtime, message.roomId, {
           status: AuthState.NEED_COOPERATIVE,
           userId: message.userId,
-          postAuthAction: "AUTHENTICATE_USER" // Set the action to perform after auth
+          postAuthAction: "CHECK_LOAN" // Set the action to perform after auth
         });
         
         return true;
       }
       
       // User is authenticated, get loan info
-      log('info', `User is authenticated, fetching loan info`);
+      elizaLogger.info('info', `User is authenticated, fetching loan info`);
       
       const loanInfoType = await determineLoanInfoType(runtime, message.content.text);
-      log('info', `Determined loan info type: ${loanInfoType}`);
+      elizaLogger.info('info', `Determined loan info type: ${loanInfoType}`);
       
       const apiUrl = `https://api.techfsn.com/api/bot/client-loan-info?tenant=${authState.cooperative}&employee_number=${authState.credentials.employee_number}`;
       
-      log('info', `Fetching loan info from ${apiUrl}`);
+      elizaLogger.info('info', `Fetching loan info from ${apiUrl}`);
       
       const response = await fetch(apiUrl, {
         method: 'GET',
@@ -1032,28 +1276,48 @@ const loanInfoAction: Action = {
         }
       });
       
-      log('info', `Loan API response status: ${response.status}`);
+      elizaLogger.info('info', `Loan API response status: ${response.status}`);
       
       if (!response.ok) {
         // Handle token expiration
         if (response.status === 401) {
-          log('info', 'Token expired, restarting authentication flow');
+          elizaLogger.info('info', 'Token expired, restarting authentication flow');
           
+          const errorResponse = await generateAuthErrorResponse(runtime, response.status);
+    
           await callback({
-            text: "Your session has expired. Let me re-authenticate you to access your loan information. Which cooperative do you belong to?"
+            text: errorResponse
           });
           
           await setAuthState(runtime, message.roomId, {
             status: AuthState.NEED_COOPERATIVE,
             userId: message.userId,
-            postAuthAction: "CHECK_LOAN" 
+            postAuthAction: "CHECK_LOAN",
+            lastError: `API returned ${response.status}`
           });
+          
+              
+          
           
           return true;
         }
+        if(response.status === 403) {
+          elizaLogger.error('error', 'Loan API error: 403 - Token expired');
+          const errorResponse = await generateAuthErrorResponse(runtime, response.status);
+          await callback({
+            text: errorResponse
+          });
+          await setAuthState(runtime, message.roomId, {
+            status: AuthState.NEED_COOPERATIVE,
+            userId: message.userId,
+            postAuthAction: "AUTHENTICATE_USER",
+            lastError: `API returned ${response.status}`
+          });
+
+        }
         
         const errorText = await response.text();
-        log('error', `Loan API error: ${response.status} - ${errorText}`);
+        elizaLogger.error('error', `Loan API error: ${response.status} - ${errorText}`);
         throw new Error(`Failed to fetch loan info: ${response.statusText}`);
       }
       
@@ -1061,9 +1325,9 @@ const loanInfoAction: Action = {
       let loanData;
       try {
         loanData = JSON.parse(responseText);
-        log('debug', `Loan API parsed response:`, loanData);
+        elizaLogger.debug('debug', `Loan API parsed response:`, loanData);
       } catch (e) {
-        log('error', `Failed to parse loan data JSON: ${e.message}`);
+        elizaLogger.error('error', `Failed to parse loan data JSON: ${e.message}`);
         throw new Error(`Invalid JSON response: ${responseText}`);
       }
       
@@ -1079,7 +1343,7 @@ const loanInfoAction: Action = {
       
       return true;
     } catch (error) {
-      log('error', 'Error fetching loan information', error);
+      elizaLogger.error('error', 'Error fetching loan information', error);
       
       await callback({
         text: "I encountered an error while retrieving your loan information. Let me try again. Which cooperative do you belong to?"
@@ -1127,6 +1391,51 @@ const loanInfoAction: Action = {
           action: "CHECK_LOAN"
         }
       }
+    ],
+    [
+      {
+        user: "{{user1}}",
+        content: {
+          text: "When is my next payment due?"
+        }
+      },
+      {
+        user: "{{user2}}",
+        content: {
+          text: "I'll need to check your loan payment schedule. First, could you tell me which cooperative you're with?",
+          action: "CHECK_LOAN"
+        }
+      }
+    ],
+    [
+      {
+        user: "{{user1}}",
+        content: {
+          text: "How much interest have I paid so far?"
+        }
+      },
+      {
+        user: "{{user2}}",
+        content: {
+          text: "I'd be happy to check your interest payments. To access that information, I'll first need to verify your identity. Which cooperative are you with?",
+          action: "CHECK_LOAN"
+        }
+      }
+    ],
+    [
+      {
+        user: "{{user1}}",
+        content: {
+          text: "I'd like to understand my repayment structure"
+        }
+      },
+      {
+        user: "{{user2}}",
+        content: {
+          text: "I can help you understand your loan repayment structure. First, I'll need to authenticate you. Which cooperative do you belong to?",
+          action: "CHECK_LOAN"
+        }
+      }
     ]
   ]
 };
@@ -1134,7 +1443,7 @@ const loanInfoAction: Action = {
   // Helper functions for loan action
 // Improved function to determine loan info type from user message
 async function determineLoanInfoType(runtime: IAgentRuntime, message: string): Promise<string> {
-  log('debug', `Determining loan info type for message: "${message}"`);
+  elizaLogger.debug('debug', `Determining loan info type for message: "${message}"`);
   
   const context = `
 Determine what specific loan information the user is asking about from their message.
@@ -1173,7 +1482,7 @@ User message: "${message}"
     return "DETAILS";
   }
   
-  log('debug', `Determined loan info type: ${normalizedType}`);
+  elizaLogger.debug('debug', `Determined loan info type: ${normalizedType}`);
   return normalizedType;
 }
 
@@ -1182,7 +1491,7 @@ async function formatLoanResponseWithErrorHandling(runtime: IAgentRuntime, loanD
   try {
     return await formatLoanResponse(runtime, loanData, infoType);
   } catch (error) {
-    log('error', 'Error formatting loan response', error);
+    elizaLogger.error('error', 'Error formatting loan response', error);
     
     // Return a generic response when formatting fails
     return "I was able to retrieve your loan information, but encountered an issue formatting the details. " +
@@ -1202,13 +1511,13 @@ async function formatLoanResponseWithErrorHandling(runtime: IAgentRuntime, loanD
  * @returns A formatted string response
  */
 async function formatLoanResponse(runtime: IAgentRuntime, loanData: any, infoType: string): Promise<string> {
-  log('debug', `Formatting loan response for type: ${infoType}`);
+  elizaLogger.debug('debug', `Formatting loan response for type: ${infoType}`);
   
   // Handle empty or missing loan data
   if (!loanData || 
       (typeof loanData === 'object' && Object.keys(loanData).length === 0) || 
       (Array.isArray(loanData) && loanData.length === 0)) {
-    log('info', 'No loan data available for user');
+    elizaLogger.info('info', 'No loan data available for user');
     return "I checked your account, but you don't currently have any active loans in our system. " +
            "If you believe this is incorrect or would like to inquire about loan eligibility, " +
            "please contact your cooperative's support team for assistance.";
@@ -1217,7 +1526,7 @@ async function formatLoanResponse(runtime: IAgentRuntime, loanData: any, infoTyp
   try {
     // Sanitize and validate loan data to prevent errors
     const sanitizedData = sanitizeLoanData(loanData);
-    log('debug', `Sanitized loan data for formatting`, sanitizedData);
+    elizaLogger.debug('debug', `Sanitized loan data for formatting`, sanitizedData);
     
     // Create a context based on the info type requested
     const context = `
@@ -1242,7 +1551,7 @@ Start with a brief greeting and end with a helpful offer or suggestion.
 Keep your response under 150 words, clear and focused.
 `;
     
-    log('debug', 'Generating formatted loan response text');
+    elizaLogger.debug('debug', 'Generating formatted loan response text');
     
     const formattedResponse = await generateText({
       runtime,
@@ -1250,10 +1559,10 @@ Keep your response under 150 words, clear and focused.
       modelClass: ModelClass.LARGE,
     });
     
-    log('debug', `Generated loan response (${formattedResponse.length} chars)`);
+    elizaLogger.debug('debug', `Generated loan response (${formattedResponse.length} chars)`);
     return formattedResponse;
   } catch (error) {
-    log('error', 'Error formatting loan response:', error);
+    elizaLogger.error('error', 'Error formatting loan response:', error);
     
     // Fallback response that still provides some value
     return createFallbackLoanResponse(loanData, infoType);
@@ -1429,7 +1738,7 @@ function createFallbackLoanResponse(loanData: any, infoType: string): string {
       `I found your loan information but couldn't format it in detail. I recommend contacting your cooperative's support team for specific information about your ${infoType.toLowerCase()}.`;
     
   } catch (error) {
-    log('error', 'Error creating fallback loan response:', error);
+    elizaLogger.error('error', 'Error creating fallback loan response:', error);
     
     // Ultra-fallback when everything else fails
     return "I found your loan information, but I'm having trouble formatting the details. " +
@@ -1461,7 +1770,7 @@ async function checkAndResetExpiredAuthState(runtime: IAgentRuntime, roomId: UUI
     
     // Check if the auth flow has timed out
     if (now - updatedAt > timeoutThreshold) {
-      log('info', `Auth flow timed out for room ${roomId}, last updated ${(now - updatedAt) / 60000} minutes ago`);
+      elizaLogger.info('info', `Auth flow timed out for room ${roomId}, last updated ${(now - updatedAt) / 60000} minutes ago`);
       
       // Reset to initial state
       await setAuthState(runtime, roomId, {
@@ -1476,7 +1785,7 @@ async function checkAndResetExpiredAuthState(runtime: IAgentRuntime, roomId: UUI
     
     return false;
   } catch (error) {
-    log('error', `Error checking expired auth state for room ${roomId}:`, error);
+    elizaLogger.error('error', `Error checking expired auth state for room ${roomId}:`, error);
     return false;
   }
 }
@@ -1484,12 +1793,12 @@ async function checkAndResetExpiredAuthState(runtime: IAgentRuntime, roomId: UUI
 // Enhanced cleanup function for expired auth states
 async function cleanupExpiredAuthStates(runtime: IAgentRuntime) {
   try {
-    log('info', 'Running auth state cleanup');
+    elizaLogger.info('info', 'Running auth state cleanup');
     const cutoffTime = Date.now() - (24 * 60 * 60 * 1000); // 24 hours ago
     
     // This is a placeholder - implementation would depend on your database adapter capabilities
     // You would need to adapt this to your actual database operations
-    log('info', `Would clean up auth states older than ${new Date(cutoffTime).toISOString()}`);
+    elizaLogger.info('info', `Would clean up auth states older than ${new Date(cutoffTime).toISOString()}`);
     
     // Example implementation if your database adapter supports the operation:
     /*
@@ -1501,10 +1810,10 @@ async function cleanupExpiredAuthStates(runtime: IAgentRuntime) {
       }
     });
     
-    log('info', `Cleaned up ${result.deletedCount} expired auth states`);
+    elizaLogger.info('info', `Cleaned up ${result.deletedCount} expired auth states`);
     */
   } catch (error) {
-    log('error', 'Error during auth state cleanup', error);
+    elizaLogger.error('error', 'Error during auth state cleanup', error);
   }
 }
   
@@ -1538,7 +1847,7 @@ setInterval(() => {
   const authStatusProvider: Provider = {
     get: async (runtime: IAgentRuntime, message: Memory, _state?: State) => {
       try {
-        log('debug', `Getting auth status for provider in room ${message.roomId}`);
+        elizaLogger.debug('debug', `Getting auth status for provider in room ${message.roomId}`);
         
         const memories = await runtime.databaseAdapter.getMemories({
           roomId: message.roomId,
@@ -1576,11 +1885,166 @@ setInterval(() => {
         
         return statusMessage;
       } catch (error) {
-        log('error', 'Error getting auth status for provider', error);
+        elizaLogger.error('error', 'Error getting auth status for provider', error);
         return `Error retrieving authentication status: ${error.message}`;
       }
     }
   };
+  // ===== DIRECT OTP ACTION =====
+// Add this new action specifically for OTP verification to ensure it's properly handled
+
+const verifyOTPAction: Action = {
+  name: "VERIFY_OTP",
+  description: "Verifies the OTP code sent to the user's email during authentication",
+  similes: ["CHECK_OTP", "ENTER_OTP", "VERIFY_CODE", "CONFIRM_OTP", "VALIDATE_OTP"],
+  
+  validate: async (runtime: IAgentRuntime, message: Memory) => {
+    const text = message.content.text.trim();
+    
+    // ONLY handle pure numeric messages
+    if (!/^\d+$/.test(text)) {
+      return false;
+    }
+    
+    elizaLogger.info('info', `Pure numeric input detected: "${text}"`);
+    
+    try {
+      const authState = await getAuthState(runtime, message.roomId);
+      elizaLogger.info('info', `Current auth state for numeric input: ${authState.status}`);
+      
+      // ONLY handle if we're waiting for OTP
+      if (authState.status !== AuthState.NEED_OTP) {
+        elizaLogger.info('info', `Not in OTP verification state, skipping.`);
+        return false;
+      }
+      
+      elizaLogger.info('info', `✓ IN OTP VERIFICATION STATE - handling numeric input`);
+      elizaLogger.info('info', `Expected OTP: ${authState.otp}, Received: ${text}`);
+      
+      // Guarantee this has the highest priority
+      return true;
+    } catch (error) {
+      elizaLogger.error('error', 'Error in VERIFY_OTP validator:', error);
+      return false;
+    }
+  },
+  
+  handler: async (runtime: IAgentRuntime, message: Memory, state: State, _options, callback: HandlerCallback) => {
+    elizaLogger.info('info', `VERIFY_OTP HANDLER EXECUTING for message: "${message.content.text}"`);
+    
+    try {
+      const authState = await getAuthState(runtime, message.roomId);
+      const enteredOTP = message.content.text.trim();
+      
+      elizaLogger.info('info', `Verifying OTP: entered=${enteredOTP}, expected=${authState.otp}`);
+      
+      if (authState.status !== AuthState.NEED_OTP) {
+        elizaLogger.warn('warn', `Not in OTP verification state. Current state: ${authState.status}`);
+        return false;
+      }
+      
+      // OTP verification logic
+      if (enteredOTP === authState.otp) {
+        elizaLogger.info('info', `★★★ OTP VERIFICATION SUCCESSFUL ★★★`);
+        
+        // Update auth state to authenticated FIRST
+        await setAuthState(runtime, message.roomId, {
+          ...authState,
+          status: AuthState.AUTHENTICATED,
+          verifiedAt: new Date().toISOString()
+        });
+        
+        elizaLogger.info('info', `Auth state updated to AUTHENTICATED`);
+        
+        // Check for post-auth action
+        if (authState.postAuthAction === "CHECK_LOAN") {
+          elizaLogger.info('info', `Executing post-auth loan check`);
+          
+          await callback({
+            text: "You've been successfully authenticated! I'll now check your loan information."
+          });
+          
+          const loanInfoType = await determineLoanInfoType(runtime, "loan information");
+          const apiUrl = `https://api.techfsn.com/api/bot/client-loan-info?tenant=${authState.cooperative}&employee_number=${authState.credentials.employee_number}`;
+          
+          elizaLogger.info('info', `Fetching loan info from ${apiUrl}`);
+          
+          try {
+            const response = await fetch(apiUrl, {
+              method: 'GET',
+              headers: {
+                'Authorization': `Bearer ${authState.token}`,
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'fsn-hash': FSN_HASH
+              }
+            });
+            
+            if (!response.ok) {
+              throw new Error(`API error: ${response.status}`);
+            }
+            
+            const loanData = await response.json();
+            const formattedResponse = await formatLoanResponse(runtime, loanData, loanInfoType);
+            
+            await callback({
+              text: formattedResponse
+            });
+          } catch (error) {
+            elizaLogger.error('error', 'Error fetching loan info after OTP verification', error);
+            await callback({
+              text: "I authenticated you successfully, but encountered an issue retrieving your loan information. Please ask me about your loan again, and I'll try once more."
+            });
+          }
+        } else {
+          elizaLogger.info('info', `No post-auth action, sending success message`);
+          await callback({
+            text: "Authentication successful! You're now logged in and can check your loan information or perform other account-related actions. How can I help you today?"
+          });
+        }
+        
+        return true;
+      } else {
+        elizaLogger.warn('warn', `OTP verification failed: entered "${enteredOTP}", expected "${authState.otp}"`);
+        
+        await callback({
+          text: "The verification code you provided doesn't match what we sent. Please check your email and try again. If you don't see it, check your spam folder."
+        });
+        
+        return true;
+      }
+    } catch (error) {
+      elizaLogger.error('error', 'Error in VERIFY_OTP handler:', error);
+      
+      await callback({
+        text: "I encountered an error verifying your code. Please try entering it again."
+      });
+      
+      return true;
+    }
+  },
+  
+  examples: [
+    [
+      {
+        user: "{{user1}}",
+        content: {
+          text: "123456"
+        }
+      },
+      {
+        user: "{{user2}}",
+        content: {
+          text: "Authentication successful! You're now logged in and can check your loan information or perform other account-related actions. How can I help you today?",
+          action: "VERIFY_OTP"
+        }
+      }
+    ]
+  ]
+};
+
+
+
 
 
   
@@ -1611,7 +2075,7 @@ If a user mentions a cooperative name like "Immigration" it will be normalized t
     {
       get: async (runtime: IAgentRuntime, message: Memory, _state?: State) => {
         try {
-          log('debug', `Getting auth status for provider in room ${message.roomId}`);
+          elizaLogger.debug('debug', `Getting auth status for provider in room ${message.roomId}`);
           
           const memories = await runtime.databaseAdapter.getMemories({
             roomId: message.roomId,
@@ -1649,7 +2113,7 @@ If a user mentions a cooperative name like "Immigration" it will be normalized t
           
           return statusMessage;
         } catch (error) {
-          log('error', 'Error getting auth status for provider', error);
+          elizaLogger.error('error', 'Error getting auth status for provider', error);
           return `Error retrieving authentication status: ${error.message}`;
         }
       }
@@ -1657,7 +2121,7 @@ If a user mentions a cooperative name like "Immigration" it will be normalized t
   ],
   
   // Set up both actions
-  actions: [authenticateAction, loanInfoAction, resetAction],  
+  actions: [verifyOTPAction, authenticateAction, resetAction, loanInfoAction],
 };
 
 
