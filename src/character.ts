@@ -4,7 +4,7 @@ export const character: Character = {
     name: "EasyM",
     plugins: [],
     clients: [Clients.TELEGRAM],
-    modelProvider: ModelProviderName.OPENAI,
+    modelProvider: ModelProviderName.GROQ,
     settings: {
         secrets: {},
         voice: {
