@@ -811,6 +811,7 @@ const authenticateAction: Action = {
     "VERIFY ME", "CHECK ACCOUNT", "ACCESS ACCOUNT", "VALIDATE USER",
     "CONFIRM IDENTITY", "AUTHENTICATION", "LOG ME IN", "VERIFY ACCOUNT"
   ],
+  suppressInitialMessage: true,
   validate: async (runtime: IAgentRuntime, message: Memory) => {
     const text = message.content.text.trim();
     if (/^\d+$/.test(text)) {
@@ -874,6 +875,7 @@ const resetAction: Action = {
   name: "RESET_AUTH",
   description: "Reset authentication state and start fresh",
   similes: ["RESTART", "START_OVER", "RESET", "CLEAR", "REFRESH"],
+  suppressInitialMessage: true,
   validate: async (runtime: IAgentRuntime, message: Memory) => {
     const text = message.content.text.toLowerCase();
     const resetKeywords = ["reset", "restart", "start over", "clear", "begin again", "start fresh", "start new", "new session"];
@@ -909,6 +911,7 @@ const loanInfoAction: Action = {
     "LOAN_INFO", "LOAN_STATUS", "CHECK_LOAN_INFO", "GET_LOAN_STATUS", "LOAN_BALANCE", "LOAN_DETAILS", "MY_LOAN", "VIEW_LOAN","CHECK_LOAN",
     "LOAN_QUERY", "LOAN_BALANCE", "LOAN_PAYMENT", "LOAN_HISTORY", "LOAN_ELIGIBILITY", "LOAN_AMOUNT", "LOAN_REPAYMENT"
   ],
+  suppressInitialMessage: true,
   validate: async (runtime: IAgentRuntime, message: Memory) => {
     elizaLogger.info(`Validating loan info action for message: "${message.content.text}"`);
     const text = message.content.text.toLowerCase();
@@ -1036,6 +1039,7 @@ const verifyOTPAction: Action = {
   name: "VERIFY_OTP",
   description: "Verifies the OTP code sent to the user's email during authentication",
   similes: ["CHECK_OTP", "ENTER_OTP", "VERIFY_CODE", "CONFIRM_OTP", "VALIDATE_OTP"],
+  suppressInitialMessage: true,
   validate: async (runtime: IAgentRuntime, message: Memory) => {
     const text = message.content.text.trim();
     if (!/^\d+$/.test(text)) return false;
